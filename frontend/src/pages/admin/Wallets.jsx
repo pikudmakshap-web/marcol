@@ -605,7 +605,7 @@ function Wallets() {
                     <div className="bg-white rounded-[24px] shadow-2xl w-full max-w-md relative z-10 overflow-hidden flex flex-col max-h-[80vh]">
                         <div className="px-6 py-5 border-b border-gray-100 flex flex-col gap-4 bg-gray-50/50">
                             <div className="flex justify-between items-center">
-                                <h2 className="text-xl font-bold text-[#2d3748]">הוספת משתמשים לחשבון</h2>
+                                <h2 className="text-xl font-bold text-[#2d3748]">שיוך משתמשים לחשבון</h2>
                                 <button type="button" onClick={() => setIsAddUserModalOpen(false)} className="w-8 h-8 rounded-full bg-white shadow-sm flex items-center justify-center text-gray-400 hover:text-gray-600">
                                     <span className="material-symbols-outlined text-[20px]">close</span>
                                 </button>
