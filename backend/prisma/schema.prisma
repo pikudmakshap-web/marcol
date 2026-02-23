@@ -1,0 +1,192 @@
+// Prisma Schema for POS System
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id             String    @id @default(auto()) @map("_id") @db.ObjectId
+  username       String    @unique
+  passwordHash   String    @map("password_hash")
+  fullName       String    @map("full_name")
+  personalNumber String?   @unique @map("personal_number")
+  barcode        String?   @unique
+  role           UserRole
+  email          String?
+  isActive       Boolean   @default(true) @map("is_active")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  walletUsers         WalletUser[]
+  transactionsAsOfficer Transaction[] @relation("OfficerTransactions")
+  transactionsAsCashier Transaction[] @relation("CashierTransactions")
+  inventoryRestocks   Inventory[]
+  messageReads        UserMessageRead[]
+
+  @@map("users")
+}
+
+model Wallet {
+  id             String    @id @default(auto()) @map("_id") @db.ObjectId
+  walletNumber   String    @unique @map("wallet_number")
+  name           String
+  description    String?
+  currentBalance Float     @default(0) @map("current_balance")
+  maxLimit       Float     @map("max_limit")
+  renewalDate    DateTime? @map("renewal_date")
+  renewalPeriod  String?   @map("renewal_period")
+  isActive       Boolean   @default(true) @map("is_active")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  walletUsers  WalletUser[]
+  transactions Transaction[]
+
+  @@map("wallets")
+}
+
+model WalletUser {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  walletId   String   @map("wallet_id") @db.ObjectId
+  userId     String   @map("user_id") @db.ObjectId
+  assignedAt DateTime @default(now()) @map("assigned_at")
+
+  // Relations
+  wallet Wallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([walletId, userId])
+  @@map("wallet_users")
+}
+
+model Product {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  name        String
+  description String?
+  sku         String?  @unique
+  barcode     String?  @unique
+  category    String?
+  unitPrice   Float    @map("unit_price")
+  supplierName String? @map("supplier_name")
+  imageUrl    String?  @map("image_url")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  inventory        Inventory?
+  transactionItems TransactionItem[]
+
+  @@map("products")
+}
+
+model Inventory {
+  id              String    @id @default(auto()) @map("_id") @db.ObjectId
+  productId       String    @unique @map("product_id") @db.ObjectId
+  quantity        Int       @default(0)
+  minStockAlert   Int       @default(10) @map("min_stock_alert")
+  location        String?
+  expiryDate      DateTime? @map("expiry_date")
+  lastRestockDate DateTime? @map("last_restock_date")
+  lastRestockBy   String?   @map("last_restock_by") @db.ObjectId
+  costPerUnit     Float?    @map("cost_per_unit")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  product       Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  restockedBy   User?   @relation(fields: [lastRestockBy], references: [id])
+
+  @@map("inventory")
+}
+
+model Transaction {
+  id                String          @id @default(auto()) @map("_id") @db.ObjectId
+  transactionNumber String          @unique @map("transaction_number")
+  officerId         String?         @map("officer_id") @db.ObjectId
+  cashierId         String?         @map("cashier_id") @db.ObjectId
+  walletId          String?         @map("wallet_id") @db.ObjectId
+  totalAmount       Float           @map("total_amount")
+  transactionType   TransactionType @map("transaction_type")
+  status            String          @default("completed")
+  notes             String?
+  createdAt         DateTime        @default(now()) @map("created_at")
+
+  // Relations
+  officer User?             @relation("OfficerTransactions", fields: [officerId], references: [id])
+  cashier User?             @relation("CashierTransactions", fields: [cashierId], references: [id])
+  wallet  Wallet?           @relation(fields: [walletId], references: [id])
+  items   TransactionItem[]
+
+  @@map("transactions")
+}
+
+model TransactionItem {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  transactionId String   @map("transaction_id") @db.ObjectId
+  productId     String?  @map("product_id") @db.ObjectId
+  productName   String   @map("product_name")
+  quantity      Int
+  unitPrice     Float    @map("unit_price")
+  lineTotal     Float    @map("line_total")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  // Relations
+  transaction Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  product     Product?    @relation(fields: [productId], references: [id])
+
+  @@map("transaction_items")
+}
+
+model SystemSettings {
+  id                String   @id @default(auto()) @map("_id") @db.ObjectId
+  lowStockThreshold Int      @default(10) @map("low_stock_threshold")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  @@map("system_settings")
+}
+
+model SystemMessage {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  title     String
+  content   String
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  reads     UserMessageRead[]
+
+  @@map("system_messages")
+}
+
+model UserMessageRead {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId    String   @map("user_id") @db.ObjectId
+  messageId String   @map("message_id") @db.ObjectId
+  readAt    DateTime @default(now()) @map("read_at")
+
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  message   SystemMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, messageId])
+  @@map("user_message_reads")
+}
+
+// Enums
+enum UserRole {
+  admin
+  officer
+  cashier
+}
+
+enum TransactionType {
+  sale
+  return
+  deposit
+  withdrawal
+}
