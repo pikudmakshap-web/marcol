@@ -1,0 +1,242 @@
+// Prisma Schema for POS System
+
+generator client {
+  provider = "prisma-client-js"
+  engineType = "binary"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+model Environment {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  name        String   @unique
+  dbName      String?  @unique @map("db_name")
+  description String?
+  symbolImageUrls String[] @default([]) @map("symbol_image_urls")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  users           User[]
+  userEnvironments UserEnvironment[]
+  categories      Category[]
+  wallets         Wallet[]
+  products        Product[]
+  transactions    Transaction[]
+  systemMessages  SystemMessage[]
+  systemSettings  SystemSettings[]
+
+  @@map("environments")
+}
+
+model User {
+  id             String    @id @default(auto()) @map("_id") @db.ObjectId
+  username       String
+  passwordHash   String    @map("password_hash")
+  fullName       String    @map("full_name")
+  personalNumber String?   @unique @map("personal_number")
+  barcode        String?
+  role           UserRole
+  email          String?
+  isActive       Boolean   @default(true) @map("is_active")
+  lastSeen       DateTime?  @map("last_seen")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+  hasReadMessage Boolean   @default(true) @map("has_read_message")
+
+  environmentId  String?   @map("environment_id") @db.ObjectId
+  environment    Environment? @relation(fields: [environmentId], references: [id], onDelete: Cascade)
+
+  // Relations
+  userEnvironments    UserEnvironment[]
+  walletUsers         WalletUser[]
+  transactionsAsOfficer Transaction[] @relation("OfficerTransactions")
+  transactionsAsCashier Transaction[] @relation("CashierTransactions")
+  productRestocks     Product[]     @relation("ProductLastRestock")
+
+  @@map("users")
+}
+
+model Category {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  name          String
+  color         String   @default("#ffffff")
+  createdAt     DateTime @default(now()) @map("created_at")
+  environmentId String   @map("environment_id") @db.ObjectId
+  environment   Environment @relation(fields: [environmentId], references: [id], onDelete: Cascade)
+
+  @@unique([name, environmentId])
+  @@map("categories")
+}
+
+type WalletCategoryBalance {
+  categoryName String   @map("category_name")
+  balance      Float
+}
+
+model Wallet {
+  id             String    @id @default(auto()) @map("_id") @db.ObjectId
+  walletNumber   String    @map("wallet_number")
+  name           String
+  description    String?
+  currentBalance Float     @default(0) @map("current_balance")
+  categoryBalances WalletCategoryBalance[]
+  renewalDate    DateTime? @map("renewal_date")
+  renewalPeriod  String?   @map("renewal_period")
+  isActive       Boolean   @default(true) @map("is_active")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  environmentId  String   @map("environment_id") @db.ObjectId
+  environment    Environment @relation(fields: [environmentId], references: [id], onDelete: Cascade)
+
+  // Relations
+  walletUsers  WalletUser[]
+  transactions Transaction[]
+
+  @@unique([walletNumber, environmentId])
+  @@map("wallets")
+}
+
+model WalletUser {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  walletId   String   @map("wallet_id") @db.ObjectId
+  userId     String   @map("user_id") @db.ObjectId
+  assignedAt DateTime @default(now()) @map("assigned_at")
+
+  // Relations
+  wallet Wallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([walletId, userId])
+  @@map("wallet_users")
+}
+
+model Product {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  name        String
+  description String?
+  sku         String?
+  barcode     String?
+  category    String?
+  unitPrice   Float    @map("unit_price")
+  supplierName String? @map("supplier_name")
+  imageUrl    String?  @map("image_url")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // New Inventory Fields
+  quantity        Int       @default(0)
+  initialQuantity Int       @default(0) @map("initial_quantity")
+  minStockAlert   Int       @default(10) @map("min_stock_alert")
+  location        String?
+  expiryDate      DateTime? @map("expiry_date")
+  lastRestockDate DateTime? @map("last_restock_date")
+  lastRestockById String?   @map("last_restock_by") @db.ObjectId
+  costPerUnit     Float?    @map("cost_per_unit")
+
+  environmentId  String   @map("environment_id") @db.ObjectId
+  environment    Environment @relation(fields: [environmentId], references: [id], onDelete: Cascade)
+
+  // Relations
+  lastRestockBy    User?       @relation("ProductLastRestock", fields: [lastRestockById], references: [id])
+
+  @@unique([barcode, environmentId])
+  @@map("products")
+}
+
+
+model Transaction {
+  id                String          @id @default(auto()) @map("_id") @db.ObjectId
+  transactionNumber String          @map("transaction_number")
+  officerId         String?         @map("officer_id") @db.ObjectId
+  cashierId         String?         @map("cashier_id") @db.ObjectId
+  walletId          String?         @map("wallet_id") @db.ObjectId
+  totalAmount       Float           @map("total_amount")
+  transactionType   TransactionType @map("transaction_type")
+  status            String          @default("completed")
+  notes             String?
+  createdAt         DateTime        @default(now()) @map("created_at")
+
+  environmentId     String   @map("environment_id") @db.ObjectId
+  environment       Environment @relation(fields: [environmentId], references: [id], onDelete: Cascade)
+
+  // Relations
+  officer User?             @relation("OfficerTransactions", fields: [officerId], references: [id])
+  cashier User?             @relation("CashierTransactions", fields: [cashierId], references: [id])
+  wallet  Wallet?           @relation(fields: [walletId], references: [id])
+  items   TransactionItemType[]
+
+  @@unique([transactionNumber, environmentId])
+  @@map("transactions")
+}
+
+type TransactionItemType {
+  productId    String?  @map("product_id") @db.ObjectId
+  productName  String   @map("product_name")
+  categoryName String?  @map("category_name")
+  quantity     Int
+  unitPrice    Float    @map("unit_price")
+  lineTotal    Float    @map("line_total")
+  createdAt    DateTime @default(now()) @map("created_at")
+}
+
+
+model SystemMessage {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  title     String
+  content   String
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  environmentId String   @map("environment_id") @db.ObjectId
+  environment   Environment @relation(fields: [environmentId], references: [id], onDelete: Cascade)
+
+  @@map("system_messages")
+}
+
+model SystemSettings {
+  id                 String   @id @default(auto()) @map("_id") @db.ObjectId
+  lowStockPercentage Float    @default(10.0) @map("low_stock_percentage")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  environmentId String   @map("environment_id") @db.ObjectId
+  environment   Environment @relation(fields: [environmentId], references: [id], onDelete: Cascade)
+
+  @@unique([environmentId])
+  @@map("system_settings")
+}
+
+model UserEnvironment {
+  id            String      @id @default(auto()) @map("_id") @db.ObjectId
+  userId        String      @db.ObjectId @map("user_id")
+  environmentId String      @db.ObjectId @map("environment_id")
+  role          UserRole
+  joinedAt      DateTime?   @default(now()) @map("joined_at")
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  environment   Environment @relation(fields: [environmentId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, environmentId])
+  @@map("user_environments")
+}
+
+// Enums
+enum UserRole {
+  superadmin
+  admin
+  officer
+  cashier
+}
+
+enum TransactionType {
+  sale
+  return
+  deposit
+  withdrawal
+}
+
