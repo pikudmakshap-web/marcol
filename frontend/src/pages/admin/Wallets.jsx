@@ -1,4 +1,5 @@
-﻿import React, { useState, useEffect, useRef, useMemo } from 'react';
+import BarcodeInput from '../../components/BarcodeInput';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createWallet, updateWallet, deleteWallet, getWalletTransactions } from '../../services/walletService';
 import { useNavigate, useOutletContext } from 'react-router-dom';
 import { getForceActiveMessage } from '../../services/messageService';
@@ -332,6 +333,9 @@ function Wallets() {
 
     const handleSubmit = async (e) => {
         e.preventDefault();
+        if (!/^[0-9]{1,128}$/.test(formData.walletNumber)) {
+            toast.error('מספר הארנק הוא הברקוד: יש להזין ספרות בלבד.'); return;
+        }
         if (systemMode === 'categories' && formData.categories.length === 0) {
             toast.error('במצב קטגוריות חובה להגדיר לפחות קטגוריה אחת בארנק');
             return;
@@ -965,7 +969,7 @@ function Wallets() {
                                         </div>
                                         <div>
                                             <label className="block text-sm font-bold text-gray-700 mb-1">מספר ארנק *</label>
-                                            <input type="text" required className="w-full px-4 py-3 rounded-xl bg-gray-50 border-none text-sm focus:ring-2 focus:ring-[#526f52]/20" value={formData.walletNumber} onChange={(e) => setFormData({ ...formData, walletNumber: e.target.value })} />
+                                            <BarcodeInput entity="wallet" entityId={isEditMode ? currentWallet?.id : undefined} environmentId={currentUser?.environmentId} type="text" required className="w-full px-4 py-3 rounded-xl bg-gray-50 border-none text-sm focus:ring-2 focus:ring-[#526f52]/20" value={formData.walletNumber} onChange={(e) => setFormData({ ...formData, walletNumber: e.target.value })} />
                                         </div>
                                     </div>
                                     <div className="mt-8">

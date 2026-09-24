@@ -1,4 +1,5 @@
 const express = require('express');
+const { normalizeBarcode, assertAvailable, withBarcodeWrite, sendBarcodeError, availabilityHandler } = require('../services/barcodeService.js');
 const { authenticateToken, authorizeRoles } = require('../middleware/auth.js');
 const { getIO } = require('../socket.js');
 const { usersPrisma } = require('../config/database.js');
@@ -19,6 +20,8 @@ async function getNextCategoryColor(environmentId, tenantPrisma) {
 
 const router = express.Router();
 router.use(authenticateToken);
+// Advisory only; every save repeats this check under the shared database lock.
+router.get('/barcode-availability', authorizeRoles('admin'), availabilityHandler);
 
 const productListSelect = {
     id: true,
@@ -95,6 +98,7 @@ router.get('/', async (req, res, next) => {
 
         return res.json(products);
     } catch (error) {
+        if (sendBarcodeError(error, res)) return;
         return next(error);
     }
 });
@@ -114,6 +118,7 @@ router.get('/:id/image', async (req, res, next) => {
 
         return res.json({ imageUrl: product.imageUrl || null });
     } catch (error) {
+        if (sendBarcodeError(error, res)) return;
         return next(error);
     }
 });
@@ -131,6 +136,7 @@ router.get('/:id', async (req, res, next) => {
 
         return res.json(product);
     } catch (error) {
+        if (sendBarcodeError(error, res)) return;
         return next(error);
     }
 });
@@ -152,6 +158,7 @@ router.get('/barcode/:barcode', async (req, res, next) => {
 
         return res.json(product);
     } catch (error) {
+        if (sendBarcodeError(error, res)) return;
         return next(error);
     }
 });
@@ -162,6 +169,8 @@ router.post('/', authorizeRoles('admin'), async (req, res, next) => {
         const tenantPrisma = requireTenantPrisma(req);
         const { name, description, sku, barcode, unitPrice, supplierName, imageUrl, initialStock } = req.body;
         let { category } = req.body;
+        const normalizedBarcode = normalizeBarcode(barcode);
+        await assertAvailable(tenantPrisma, req.user.environmentId, normalizedBarcode, 'product');
 
         if (!name || !unitPrice) {
             return res.status(400).json({ error: 'Required fields: name, unitPrice' });
@@ -206,12 +215,12 @@ router.post('/', authorizeRoles('admin'), async (req, res, next) => {
             });
         }
 
-        const product = await tenantPrisma.product.create({
+        const product = await withBarcodeWrite(tenantPrisma, req.user.environmentId, 'product', normalizedBarcode, undefined, async (tx, code) => tx.product.create({
             data: {
                 name,
                 description,
                 sku: sku || null,
-                barcode: barcode || null,
+                barcode: code,
                 category,
                 unitPrice: parseFloat(unitPrice),
                 supplierName,
@@ -222,11 +231,12 @@ router.post('/', authorizeRoles('admin'), async (req, res, next) => {
                 lastRestockById: initialStock ? req.user.id : null,
                 environmentId: req.user.environmentId
             }
-        });
+        }));
 
         getIO().emit('product_added', product);
         return res.status(201).json(product);
     } catch (error) {
+        if (sendBarcodeError(error, res)) return;
         if (error.code === 'P2002') {
             const target = error.meta?.target || '';
             if (target.includes('barcode')) {
@@ -279,7 +289,10 @@ router.put('/:id', authorizeRoles('admin', 'cashier'), async (req, res, next) =>
         if (name !== undefined) updateData.name = name;
         if (description !== undefined) updateData.description = description;
         if (sku !== undefined) updateData.sku = sku || null;
-        if (barcode !== undefined) updateData.barcode = barcode || null;
+        if (barcode !== undefined) {
+            updateData.barcode = normalizeBarcode(barcode);
+            await assertAvailable(tenantPrisma, req.user.environmentId, updateData.barcode, 'product', req.params.id);
+        }
 
         if (category !== undefined) {
             const allWallets = await tenantPrisma.wallet.findMany({
@@ -349,16 +362,17 @@ router.put('/:id', authorizeRoles('admin', 'cashier'), async (req, res, next) =>
             return res.status(404).json({ error: 'Product not found' });
         }
 
-        const updatedProduct = await tenantPrisma.product.update({
+        const updatedProduct = await withBarcodeWrite(tenantPrisma, req.user.environmentId, 'product', updateData.barcode, req.params.id, async tx => tx.product.update({
             where: { id: req.params.id },
             data: updateData
-        });
+        }));
 
         await cleanupUnusedCategories(req.user.environmentId, tenantPrisma);
 
         getIO().emit('product_updated', updatedProduct);
         return res.json(updatedProduct);
     } catch (error) {
+        if (sendBarcodeError(error, res)) return;
         if (error.code === 'P2002') {
             const target = error.meta?.target || '';
             if (target.includes('barcode')) {
@@ -386,6 +400,7 @@ router.delete('/:id', authorizeRoles('admin'), async (req, res, next) => {
         getIO().emit('product_deleted', req.params.id);
         return res.json({ message: 'Product deleted successfully' });
     } catch (error) {
+        if (sendBarcodeError(error, res)) return;
         return next(error);
     }
 });
@@ -437,6 +452,7 @@ router.get('/:id/history', authorizeRoles('admin'), async (req, res, next) => {
 
         return res.json(history);
     } catch (error) {
+        if (sendBarcodeError(error, res)) return;
         return next(error);
     }
 });

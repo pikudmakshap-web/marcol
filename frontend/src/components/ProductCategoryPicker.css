@@ -1,0 +1,16 @@
+/* Scoped to the product form; colors and menu shape match its existing category filter. */
+.marcol-product-category { position:relative; }
+.marcol-product-category input { width:100%;min-width:0;border:1px solid transparent;border-radius:12px;padding:12px 16px 12px 42px;background:#f9fafb;color:#2d3748;font:inherit;font-size:14px;box-shadow:inset 0 1px 2px rgb(0 0 0 / 5%); }
+.marcol-product-category input:focus { background:white;border-color:#526f52;outline:2px solid rgb(82 111 82 / 20%);outline-offset:1px; }
+.marcol-product-category__icon { position:absolute;left:14px;top:50%;transform:translateY(-50%);pointer-events:none;color:#6b7280;font-size:20px; }
+.marcol-product-category-menu { z-index:20050;box-sizing:border-box;background:white;border:1px solid #f3f4f6;border-radius:12px;box-shadow:0 16px 28px rgb(0 0 0 / 15%);padding:8px;overflow-y:auto;font-family:inherit;font-size:14px;color:#4b5563;overscroll-behavior:contain; }
+.marcol-product-category-menu [role=option] { display:flex;justify-content:space-between;align-items:center;gap:8px;padding:9px 14px;border-radius:8px;cursor:pointer;overflow-wrap:anywhere; }
+.marcol-product-category-menu [role=option]+[role=option] { margin-top:4px; }
+.marcol-product-category-menu [role=option].is-selected { background:#ecfdf5;color:#526f52;font-weight:700; }
+.marcol-product-category-menu [role=option].is-highlighted,.marcol-product-category-menu [role=option]:hover { background:#f3f4f6;color:#526f52; }
+.marcol-product-category-menu [role=option] .material-symbols-outlined { font-size:18px;flex-shrink:0; }
+.marcol-product-category-menu p { margin:8px 10px;font-size:12px;color:#6b7280;line-height:1.6; }
+html.dark .marcol-product-category input,html.dark .marcol-product-category-menu { background:#1f2937;color:#e5e7eb;border-color:#374151; }
+html.dark .marcol-product-category-menu [role=option].is-selected { background:#274331;color:#c6efce; }
+html.dark .marcol-product-category-menu [role=option].is-highlighted,html.dark .marcol-product-category-menu [role=option]:hover { background:#374151;color:#f0fdf4; }
+html.dark .marcol-product-category-menu p { color:#cbd5e1; }

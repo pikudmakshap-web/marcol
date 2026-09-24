@@ -246,3 +246,11 @@ enum TransactionType {
   withdrawal
 }
 
+
+// Serializes identifier writes across products and wallets in one environment.
+// Uses MongoDB's built-in unique _id; no custom index or data backfill is needed.
+model BarcodeWriteLock {
+  id    String @id @map("_id") @db.ObjectId
+  token String
+  @@map("barcode_write_locks")
+}

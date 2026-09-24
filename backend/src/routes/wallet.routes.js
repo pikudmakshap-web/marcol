@@ -1,4 +1,5 @@
 const express = require('express');
+const { barcodeError, normalizeBarcode, assertAvailable, withBarcodeWrite, sendBarcodeError } = require('../services/barcodeService.js');
 const { verifiedMutation } = require('../middleware/verifiedMutation.js');
 const { creditWallet } = require('../services/walletCreditService.js');
 const { authenticateToken, authorizeRoles } = require('../middleware/auth.js');
@@ -153,6 +154,7 @@ router.get('/search', authorizeRoles('admin', 'cashier'), async (req, res, next)
 
         return res.json(result);
     } catch (error) {
+        if (sendBarcodeError(error, res)) return;
         return next(error);
     }
 });
@@ -219,6 +221,7 @@ router.get('/', authorizeRoles('admin', 'officer', 'cashier'), async (req, res, 
 
         return res.json(wallets);
     } catch (error) {
+        if (sendBarcodeError(error, res)) return;
         return next(error);
     }
 });
@@ -268,6 +271,7 @@ router.get('/:id', authorizeRoles('admin', 'officer', 'cashier'), async (req, re
             }))
         });
     } catch (error) {
+        if (sendBarcodeError(error, res)) return;
         return next(error);
     }
 });
@@ -282,61 +286,58 @@ router.post('/', authorizeRoles('admin'), async (req, res, next) => {
             return res.status(400).json({ error: 'Required fields: name, walletNumber' });
         }
 
-        const existingWallet = await tenantPrisma.wallet.findUnique({
-            where: { walletNumber_environmentId: { walletNumber, environmentId: req.user.environmentId } }
-        });
-        if (existingWallet) {
-            return res.status(400).json({ error: 'מספר הארנק כבר קיים במערכת' });
-        }
-
-        const environmentMode = await getEnvironmentWalletMode(req.user.environmentId, tenantPrisma);
-        let currentBalance = 0;
-        let categoryBalances = [];
-
-        if (categories && categories.length > 0) {
-            categoryBalances = await syncCategoryColorsForWallet(categories, req.user.environmentId, tenantPrisma);
-            currentBalance = categoryBalances.reduce((sum, cat) => sum + cat.balance, 0);
-        } else if (generalBalance !== undefined && generalBalance !== '') {
-            currentBalance = parseFloat(generalBalance) || 0;
-        }
-
-        const requestedMode = categoryBalances.length > 0 ? 'categories' : 'general';
-        if (environmentMode === 'categories' && requestedMode !== 'categories') {
-            return res.status(400).json({ error: 'המערכת במצב תקציבים לפי קטגוריות. חובה להגדיר לפחות קטגוריה אחת בארנק.' });
-        }
-        if (environmentMode === 'general' && requestedMode !== 'general') {
-            return res.status(400).json({ error: 'המערכת במצב תקציב כללי. אי אפשר ליצור ארנק במצב קטגוריות.' });
-        }
-
-        const wallet = await tenantPrisma.wallet.create({
-            data: {
-                name,
-                walletNumber,
-                description,
-                currentBalance,
-                categoryBalances,
-                renewalDate: renewalDate ? new Date(renewalDate) : null,
-                renewalPeriod,
-                environmentId: req.user.environmentId
+        const normalizedBarcode = normalizeBarcode(walletNumber);
+        await assertAvailable(tenantPrisma, req.user.environmentId, normalizedBarcode, 'wallet');
+        const completeWallet = await withBarcodeWrite(tenantPrisma, req.user.environmentId, 'wallet', normalizedBarcode, undefined, async (tx, code) => {
+            const environmentMode = await getEnvironmentWalletMode(req.user.environmentId, tx);
+            let currentBalance = 0;
+            let categoryBalances = [];
+    
+            if (categories && categories.length > 0) {
+                categoryBalances = await syncCategoryColorsForWallet(categories, req.user.environmentId, tx);
+                currentBalance = categoryBalances.reduce((sum, cat) => sum + cat.balance, 0);
+            } else if (generalBalance !== undefined && generalBalance !== '') {
+                currentBalance = parseFloat(generalBalance) || 0;
             }
-        });
-
-        if (userIds && userIds.length > 0) {
-            await tenantPrisma.walletUser.createMany({
-                data: userIds.map((userId) => ({
-                    walletId: wallet.id,
-                    userId
-                }))
-            });
-        }
-
-        const completeWallet = await tenantPrisma.wallet.findUnique({
-            where: { id: wallet.id },
-            include: {
-                walletUsers: {
-                    select: { userId: true }
+    
+            const requestedMode = categoryBalances.length > 0 ? 'categories' : 'general';
+            if (environmentMode === 'categories' && requestedMode !== 'categories') {
+                throw barcodeError(400, 'המערכת במצב תקציבים לפי קטגוריות. חובה להגדיר לפחות קטגוריה אחת בארנק.');
+            }
+            if (environmentMode === 'general' && requestedMode !== 'general') {
+                throw barcodeError(400, 'המערכת במצב תקציב כללי. אי אפשר ליצור ארנק במצב קטגוריות.');
+            }
+    
+            const wallet = await tx.wallet.create({
+                data: {
+                    name,
+                    walletNumber: code,
+                    description,
+                    currentBalance,
+                    categoryBalances,
+                    renewalDate: renewalDate ? new Date(renewalDate) : null,
+                    renewalPeriod,
+                    environmentId: req.user.environmentId
                 }
+            });
+    
+            if (userIds && userIds.length > 0) {
+                await tx.walletUser.createMany({
+                    data: userIds.map((userId) => ({
+                        walletId: wallet.id,
+                        userId
+                    }))
+                });
             }
+    
+            return tx.wallet.findUnique({
+                where: { id: wallet.id },
+                include: {
+                    walletUsers: {
+                        select: { userId: true }
+                    }
+                }
+            });
         });
         const completeWalletUsersMap = await buildUserMapByIds(
             usersPrisma,
@@ -358,6 +359,7 @@ router.post('/', authorizeRoles('admin'), async (req, res, next) => {
             }))
         });
     } catch (error) {
+        if (sendBarcodeError(error, res)) return;
         return next(error);
     }
 });
@@ -368,131 +370,126 @@ router.put('/:id', authorizeRoles('admin'), async (req, res, next) => {
         const tenantPrisma = requireTenantPrisma(req);
         const { name, walletNumber, description, renewalDate, renewalPeriod, isActive, userIds, categories, generalBalance, notes } = req.body;
 
-        if (walletNumber) {
-            const existingWallet = await tenantPrisma.wallet.findUnique({
-                where: { walletNumber_environmentId: { walletNumber, environmentId: req.user.environmentId } }
-            });
-            if (existingWallet && existingWallet.id !== req.params.id) {
-                return res.status(400).json({ error: 'מספר הארנק כבר קיים במערכת' });
+        const normalizedBarcode = walletNumber === undefined ? undefined : normalizeBarcode(walletNumber);
+        if (normalizedBarcode !== undefined) await assertAvailable(tenantPrisma, req.user.environmentId, normalizedBarcode, 'wallet', req.params.id);
+        const updatedWallet = await withBarcodeWrite(tenantPrisma, req.user.environmentId, 'wallet', normalizedBarcode, req.params.id, async (tx, code) => {
+            const currentWallet = await tx.wallet.findUnique({ where: { id: req.params.id } });
+            if (!currentWallet || currentWallet.environmentId !== req.user.environmentId) {
+                throw barcodeError(404, 'Wallet not found', 'BARCODE_RECORD_NOT_FOUND');
             }
-        }
-
-        const currentWallet = await tenantPrisma.wallet.findUnique({ where: { id: req.params.id } });
-        if (!currentWallet || currentWallet.environmentId !== req.user.environmentId) {
-            return res.status(404).json({ error: 'Wallet not found' });
-        }
-        const currentWalletMode = getWalletMode(currentWallet);
-        const environmentMode = await getEnvironmentWalletMode(req.user.environmentId, tenantPrisma);
-
-        let parsedCategoryBalances = null;
-        if (Array.isArray(categories)) {
-            parsedCategoryBalances = await syncCategoryColorsForWallet(categories, req.user.environmentId, tenantPrisma);
-        }
-        const requestedMode = Array.isArray(categories)
-            ? (parsedCategoryBalances.length > 0 ? 'categories' : 'general')
-            : ((generalBalance !== undefined && generalBalance !== '') ? 'general' : currentWalletMode);
-
-        if (environmentMode === 'categories' && requestedMode !== 'categories') {
-            return res.status(400).json({ error: 'המערכת במצב תקציבים לפי קטגוריות. אי אפשר למחוק את כל הקטגוריות מארנק.' });
-        }
-        if (environmentMode === 'general' && requestedMode !== 'general') {
-            return res.status(400).json({ error: 'המערכת במצב תקציב כללי. אי אפשר לשנות ארנק למצב קטגוריות.' });
-        }
-
-        let transactionPromise = null;
-        const updateData = {
-            name,
-            walletNumber,
-            description,
-            renewalDate: renewalDate ? new Date(renewalDate) : null,
-            renewalPeriod,
-            isActive
-        };
-
-        let newBalance = currentWallet.currentBalance;
-        let diff = 0;
-        let balanceUpdated = false;
-
-        if (Array.isArray(categories)) {
-            const categoryBalances = parsedCategoryBalances || [];
-
-            if (categoryBalances.length > 0) {
-                newBalance = categoryBalances.reduce((sum, cat) => sum + cat.balance, 0);
-                updateData.categoryBalances = categoryBalances;
-                updateData.currentBalance = newBalance;
-            } else {
-                newBalance = (generalBalance !== undefined && generalBalance !== '') ? parseFloat(generalBalance) : 0;
+            const currentWalletMode = getWalletMode(currentWallet);
+            const environmentMode = await getEnvironmentWalletMode(req.user.environmentId, tx);
+    
+            let parsedCategoryBalances = null;
+            if (Array.isArray(categories)) {
+                parsedCategoryBalances = await syncCategoryColorsForWallet(categories, req.user.environmentId, tx);
+            }
+            const requestedMode = Array.isArray(categories)
+                ? (parsedCategoryBalances.length > 0 ? 'categories' : 'general')
+                : ((generalBalance !== undefined && generalBalance !== '') ? 'general' : currentWalletMode);
+    
+            if (environmentMode === 'categories' && requestedMode !== 'categories') {
+                throw barcodeError(400, 'המערכת במצב תקציבים לפי קטגוריות. אי אפשר למחוק את כל הקטגוריות מארנק.');
+            }
+            if (environmentMode === 'general' && requestedMode !== 'general') {
+                throw barcodeError(400, 'המערכת במצב תקציב כללי. אי אפשר לשנות ארנק למצב קטגוריות.');
+            }
+    
+            let transactionPromise = null;
+            const updateData = {
+                name,
+                walletNumber: code,
+                description,
+                renewalDate: renewalDate ? new Date(renewalDate) : null,
+                renewalPeriod,
+                isActive
+            };
+    
+            let newBalance = currentWallet.currentBalance;
+            let diff = 0;
+            let balanceUpdated = false;
+    
+            if (Array.isArray(categories)) {
+                const categoryBalances = parsedCategoryBalances || [];
+    
+                if (categoryBalances.length > 0) {
+                    newBalance = categoryBalances.reduce((sum, cat) => sum + cat.balance, 0);
+                    updateData.categoryBalances = categoryBalances;
+                    updateData.currentBalance = newBalance;
+                } else {
+                    newBalance = (generalBalance !== undefined && generalBalance !== '') ? parseFloat(generalBalance) : 0;
+                    updateData.categoryBalances = [];
+                    updateData.currentBalance = newBalance;
+                }
+                balanceUpdated = true;
+            } else if (generalBalance !== undefined && generalBalance !== '') {
+                newBalance = parseFloat(generalBalance) || 0;
                 updateData.categoryBalances = [];
                 updateData.currentBalance = newBalance;
+                balanceUpdated = true;
             }
-            balanceUpdated = true;
-        } else if (generalBalance !== undefined && generalBalance !== '') {
-            newBalance = parseFloat(generalBalance) || 0;
-            updateData.categoryBalances = [];
-            updateData.currentBalance = newBalance;
-            balanceUpdated = true;
-        }
-
-        if (balanceUpdated) {
-            diff = newBalance - currentWallet.currentBalance;
-            if (diff !== 0) {
-                const transactionType = diff > 0 ? 'deposit' : 'withdrawal';
-                const totalAmount = Math.abs(diff);
-
-                const prefix = transactionType === 'deposit' ? 'DEP' : 'WDL';
-                const datePart = new Date().toISOString().replace(/[-:T.]/g, '').substring(0, 14);
-                const randomPart = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
-                const transactionNumber = `${prefix}-${datePart}-${randomPart}`;
-
-                transactionPromise = tenantPrisma.transaction.create({
-                    data: {
-                        transactionNumber,
-                        officerId: req.user.id,
-                        walletId: currentWallet.id,
-                        totalAmount,
-                        transactionType,
-                        notes: notes || 'עדכון יתרה ידני',
-                        environmentId: req.user.environmentId
-                    }
-                });
-            }
-        }
-
-        const edited = await tenantPrisma.wallet.updateMany({
-            where: { id: req.params.id, environmentId: req.user.environmentId,
-                updatedAt: currentWallet.updatedAt, currentBalance: currentWallet.currentBalance },
-            data: updateData
-        });
-        if (edited.count !== 1) {
-            return res.status(409).json({ error: 'הארנק עודכן במקביל. יש לפתוח אותו מחדש לפני שמירה' });
-        }
-
-        await cleanupUnusedCategories(req.user.environmentId, tenantPrisma);
-
-        if (transactionPromise) {
-            await transactionPromise;
-        }
-
-        if (userIds) {
-            await tenantPrisma.walletUser.deleteMany({ where: { walletId: req.params.id } });
-            if (userIds.length > 0) {
-                await tenantPrisma.walletUser.createMany({
-                    data: userIds.map((userId) => ({
-                        walletId: req.params.id,
-                        userId
-                    }))
-                });
-            }
-        }
-
-        const updatedWallet = await tenantPrisma.wallet.findUnique({
-            where: { id: req.params.id },
-            include: {
-                walletUsers: {
-                    select: { userId: true }
+    
+            if (balanceUpdated) {
+                diff = newBalance - currentWallet.currentBalance;
+                if (diff !== 0) {
+                    const transactionType = diff > 0 ? 'deposit' : 'withdrawal';
+                    const totalAmount = Math.abs(diff);
+    
+                    const prefix = transactionType === 'deposit' ? 'DEP' : 'WDL';
+                    const datePart = new Date().toISOString().replace(/[-:T.]/g, '').substring(0, 14);
+                    const randomPart = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
+                    const transactionNumber = `${prefix}-${datePart}-${randomPart}`;
+    
+                    transactionPromise = tx.transaction.create({
+                        data: {
+                            transactionNumber,
+                            officerId: req.user.id,
+                            walletId: currentWallet.id,
+                            totalAmount,
+                            transactionType,
+                            notes: notes || 'עדכון יתרה ידני',
+                            environmentId: req.user.environmentId
+                        }
+                    });
                 }
             }
+    
+            const edited = await tx.wallet.updateMany({
+                where: { id: req.params.id, environmentId: req.user.environmentId,
+                    updatedAt: currentWallet.updatedAt, currentBalance: currentWallet.currentBalance },
+                data: updateData
+            });
+            if (edited.count !== 1) {
+                throw barcodeError(409, 'הארנק עודכן במקביל. יש לפתוח אותו מחדש לפני שמירה', 'WALLET_CHANGED');
+            }
+    
+    
+            if (transactionPromise) {
+                await transactionPromise;
+            }
+    
+            if (userIds) {
+                await tx.walletUser.deleteMany({ where: { walletId: req.params.id } });
+                if (userIds.length > 0) {
+                    await tx.walletUser.createMany({
+                        data: userIds.map((userId) => ({
+                            walletId: req.params.id,
+                            userId
+                        }))
+                    });
+                }
+            }
+    
+            return tx.wallet.findUnique({
+                where: { id: req.params.id },
+                include: {
+                    walletUsers: {
+                        select: { userId: true }
+                    }
+                }
+            });
         });
+        await cleanupUnusedCategories(req.user.environmentId, tenantPrisma);
         const updatedWalletUsersMap = await buildUserMapByIds(
             usersPrisma,
             updatedWallet.walletUsers.map((walletUser) => walletUser.userId)
@@ -513,6 +510,7 @@ router.put('/:id', authorizeRoles('admin'), async (req, res, next) => {
             }))
         });
     } catch (error) {
+        if (sendBarcodeError(error, res)) return;
         return next(error);
     }
 });
@@ -580,6 +578,7 @@ router.delete('/:id', authorizeRoles('admin'), async (req, res, next) => {
         getIO().emit('data_update', { type: 'wallet' });
         return res.json({ message: 'Wallet deleted successfully' });
     } catch (error) {
+        if (sendBarcodeError(error, res)) return;
         return next(error);
     }
 });
@@ -596,6 +595,7 @@ router.post('/:id/credit', authorizeRoles('admin'), verifiedMutation, async (req
         } catch (_notificationError) { /* The durable database result remains authoritative. */ }
         return res.status(result.replayed ? 200 : 201).json(result);
     } catch (error) {
+        if (sendBarcodeError(error, res)) return;
         return next(error);
     }
 });
@@ -648,6 +648,7 @@ router.post('/:id/debit', authorizeRoles('admin'), async (req, res, next) => {
         getIO().emit('data_update', { type: 'wallet' });
         return res.json(updated);
     } catch (error) {
+        if (sendBarcodeError(error, res)) return;
         return next(error);
     }
 });
@@ -705,6 +706,7 @@ router.get('/:id/transactions', authorizeRoles('admin', 'officer', 'cashier'), a
 
         return res.json(result);
     } catch (error) {
+        if (sendBarcodeError(error, res)) return;
         console.error('HISTORY ERROR:', error);
         return next(error);
     }

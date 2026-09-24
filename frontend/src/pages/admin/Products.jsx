@@ -1,4 +1,6 @@
-﻿import { useState, useEffect, useRef } from 'react';
+import BarcodeInput from '../../components/BarcodeInput';
+import ProductCategoryPicker from '../../components/ProductCategoryPicker';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useOutletContext } from 'react-router-dom';
 import { createProduct, updateProduct, deleteProduct, getProduct, getProductHistory } from '../../services/productService';
 import toast from 'react-hot-toast';
@@ -266,6 +268,9 @@ function Products() {
         try {
             // Ensure category is set
             const dataToSave = { ...formData };
+            if (!/^[0-9]{1,128}$/.test(dataToSave.barcode)) {
+                toast.error('יש להזין ברקוד המכיל ספרות בלבד.'); return;
+            }
             if (!dataToSave.category) {
                 toast.error('חובה לבחור קטגוריה קיימת מהרשימה');
                 return;
@@ -739,42 +744,12 @@ function Products() {
                                             </div>
                                             <div ref={formCategoryRef}>
                                                 <label className="block text-sm font-bold text-gray-700 mb-1 text-center">קטגוריה *</label>
-                                                <div className="relative group/select">
-                                                    {hasCategorySelection ? (
-                                                        <select
-                                                            required
-                                                            className="w-full px-4 py-3 rounded-xl bg-gray-50 border border-transparent text-sm focus:bg-white focus:ring-2 focus:ring-[#526f52]/40 focus:border-transparent text-[#2d3748] transition-all cursor-pointer shadow-[inset_0_1px_2px_rgba(0,0,0,0.05)] appearance-none"
-                                                            value={formData.category}
-                                                            onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                                                        >
-                                                            <option value="" disabled>בחר קטגוריה קיימת מהארנקים</option>
-                                                            {walletCategories.map((name) => (
-                                                                <option key={name} value={name}>{name}</option>
-                                                            ))}
-                                                        </select>
-                                                    ) : (
-                                                        <div className="relative">
-                                                            <input
-                                                                list="categories-datalist"
-                                                                required
-                                                                placeholder="הקלד קטגוריה חדשה או בחר קיימת..."
-                                                                className="no-datalist-arrow w-full px-4 py-3 rounded-xl bg-gray-50 border-none text-sm focus:ring-2 focus:ring-[#526f52]/20 shadow-[inset_0_1px_2px_rgba(0,0,0,0.05)] appearance-none"
-                                                                value={formData.category}
-                                                                onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                                                            />
-                                                            <datalist id="categories-datalist">
-                                                                {apiCategories.map((c) => (
-                                                                    <option key={c.id} value={c.name} />
-                                                                ))}
-                                                            </datalist>
-                                                        </div>
-                                                    )}
-                                                    <div className="absolute inset-y-0 left-0 flex items-center px-4 pointer-events-none text-gray-500">
-                                                        <span className="material-symbols-outlined text-[20px]">
-                                                            {hasCategorySelection ? 'expand_more' : 'edit_note'}
-                                                        </span>
-                                                    </div>
-                                                </div>
+                                                <ProductCategoryPicker
+                                                    value={formData.category}
+                                                    onChange={category => setFormData(prev => ({ ...prev, category }))}
+                                                    allowCreate={!hasCategorySelection}
+                                                    options={hasCategorySelection ? walletCategories : apiCategories.map(c => c.name)}
+                                                />
                                                 <p className="text-[10px] text-gray-400 mt-1 text-center">
                                                     {hasCategorySelection ? 'במצב חלוקה לקטגוריות - ניתן לבחור רק קטגוריה קיימת מהתקציב' : 'ניתן להקליד שם של קטגוריה חדשה שתיווצר אוטומטית'}
                                                 </p>
@@ -803,7 +778,7 @@ function Products() {
                                         </div>
                                         <div>
                                             <label className="block text-sm font-bold text-gray-700 mb-1 text-center">ברקוד *</label>
-                                            <input
+                                            <BarcodeInput entity="product" entityId={isEditMode ? currentProduct?.id : undefined} environmentId={user?.environmentId}
                                                 type="text" required
                                                 className="w-full px-4 py-3 rounded-xl bg-gray-50 border-none text-sm focus:ring-2 focus:ring-[#526f52]/20"
                                                 value={formData.barcode}
@@ -812,7 +787,7 @@ function Products() {
                                                 }}
                                                 onChange={(e) => setFormData({ ...formData, barcode: e.target.value })}
                                             />
-                                            <p className="text-[10px] text-gray-400 mt-1 text-center">חייב להיות ייחודי</p>
+                                            <p className="text-[10px] text-gray-400 mt-1 text-center">ייחודי למוצרים ולארנקים בסביבת העבודה הנוכחית</p>
                                         </div>
                                     </div>
 

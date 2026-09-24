@@ -1,4 +1,7 @@
-﻿import { useState, useEffect, useCallback, useRef } from 'react';
+import BarcodeInput from '../../components/BarcodeInput';
+import { useManualBarcodeAdd } from '../../hooks/useManualBarcodeAdd';
+import { filterManualBarcodes, resolveManualBarcode } from '../../utils/manualBarcode.mjs';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useProductStore } from '../../store/productStore';
 import { useNavigate, useOutletContext } from 'react-router-dom';
 import { searchWallets } from '../../services/walletService';
@@ -213,12 +216,7 @@ const POSCheckout = () => {
         )
         : [];
 
-    const manualBarcodeResults = manualBarcodeQuery
-        ? products.filter(p =>
-            p.name.toLowerCase().includes(manualBarcodeQuery.toLowerCase()) ||
-            (p.barcode && p.barcode.includes(manualBarcodeQuery))
-        )
-        : [];
+    const manualBarcodeResults = filterManualBarcodes(products, manualBarcodeQuery);
 
     // Mock Data based on image
     const [orderItems, setOrderItems] = useState([
@@ -276,6 +274,18 @@ const POSCheckout = () => {
         setSelectedCategory(null);
     }, []);
 
+    const acceptManualProduct = useCallback(product => {
+        setManualBarcodeQuery(''); setIsManualBarcodeOpen(false);
+        handleAddToCart(product);
+    }, [handleAddToCart]);
+    const commitManualBarcode = useManualBarcodeAdd({
+        open: isManualBarcodeOpen, query: manualBarcodeQuery,
+        environmentId: currentUser?.environmentId,
+        blocked: manualEntryDisabled || policyLoading || !!policyError,
+        catalogReady: isLoaded && !hasMore && !loading,
+        products, cart: orderItems, onSelect: acceptManualProduct, onError: message => toast.error(message)
+    });
+
     // This listener exists only while the checkout page is mounted. Read-only
     // fields receive a completed scan through React state, not individual keys.
     useEffect(() => {
@@ -295,7 +305,7 @@ const POSCheckout = () => {
             if (isWalletCheckOpen) { setWalletCheckQuery(value); return; }
             if (isPriceCheckOpen) { setPriceCheckQuery(value); return; }
             if (isManualBarcodeOpen || isCategoriesModalOpen) return;
-            const product = products.find((item) => item.barcode === value);
+            const product = resolveManualBarcode(products, value, { explicit: true });
             if (product) handleAddToCart(product);
             else toast.error(`לא נמצא מוצר עם ברקוד ${value}`);
         };
@@ -344,7 +354,7 @@ const POSCheckout = () => {
                     }
 
                     const scannedBarcode = barcodeBufferRef.current.trim();
-                    const product = products.find(p => p.barcode === scannedBarcode);
+                    const product = resolveManualBarcode(products, scannedBarcode, { explicit: true });
 
                     if (product) {
                         handleAddToCart(product);
@@ -721,18 +731,19 @@ const POSCheckout = () => {
                                 </button>
                             </div>
                             <div className="p-8 flex flex-col items-center w-full">
-                                <input
+                                <BarcodeInput aria-label="ברקוד להוספה לעגלה" onCommit={() => commitManualBarcode(true)}
                                         readOnly={manualEntryDisabled}
                                         inputMode={manualEntryDisabled ? 'none' : undefined}
                                         aria-readonly={manualEntryDisabled}
                                     type="text"
-                                    placeholder="הקש פריט / ברקוד כאן..."
+                                    placeholder="הקלד ברקוד — ספרות בלבד"
                                     autoFocus
                                     value={manualBarcodeQuery}
                                     onChange={(e) => { if (!manualEntryDisabled) setManualBarcodeQuery(e.target.value); }}
                                     className="w-full bg-gray-50 border border-gray-200 rounded-xl px-5 py-4 text-center text-xl font-bold text-gray-800 focus:outline-none focus:ring-2 focus:ring-[#3ce619] focus:border-transparent transition-all mb-4"
                                 />
 
+                                <p className="text-xs text-gray-500 text-center mb-3">התאמה מלאה ויחידה תתווסף אוטומטית לאחר סיום ההקלדה. אפשר גם לאשר באמצעות Enter.</p>
                                 {manualBarcodeQuery && (
                                     <div className="w-full max-h-[30vh] overflow-y-auto w-full flex flex-col gap-2 custom-scrollbar pr-2 mb-4">
                                         {manualBarcodeResults.length > 0 ? (
