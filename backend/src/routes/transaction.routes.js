@@ -19,6 +19,9 @@ router.post('/', authorizeRoles('admin', 'cashier'), async (req, res, next) => {
             return res.status(400).json({ error: 'Required fields: officerId, walletId, items' });
         }
 
+        const member = await tenantPrisma.walletUser.findFirst({ where: { walletId, userId: officerId } });
+        if (!member) return res.status(400).json({ error: 'מקבל המוצרים אינו משויך לארנק שנבחר' });
+
         const totalAmount = items.reduce((sum, item) => sum + (parseFloat(item.unitPrice) * parseInt(item.quantity, 10)), 0);
 
         const wallet = await tenantPrisma.wallet.findUnique({ where: { id: walletId } });
@@ -89,14 +92,39 @@ router.post('/', authorizeRoles('admin', 'cashier'), async (req, res, next) => {
         }
 
         const transaction = await tenantPrisma.$transaction(async (tx) => {
+            const debited = await tx.wallet.updateMany({
+                where: { id: walletId, environmentId: req.user.environmentId,
+                    updatedAt: wallet.updatedAt, currentBalance: wallet.currentBalance },
+                data: {
+                    currentBalance: { decrement: totalAmount },
+                    categoryBalances
+                }
+            });
+            if (debited.count !== 1) {
+                const conflict = new Error('הארנק עודכן במקביל. יש לרענן את בחירת הארנק ולנסות שוב');
+                conflict.status = 409;
+                throw conflict;
+            }
+
+            // Read back the committed-to-this-transaction value; never substitute today's balance for old history.
+            const walletAfterDebit = await tx.wallet.findUnique({
+                where: { id: walletId }, select: { currentBalance: true }
+            });
+            if (!Number.isFinite(wallet.currentBalance) || !Number.isFinite(walletAfterDebit?.currentBalance)) {
+                throw new Error('Wallet balance snapshot is unavailable; checkout was not committed');
+            }
+
             const trans = await tx.transaction.create({
                 data: {
                     transactionNumber: `TRX-${Date.now()}`,
                     officerId,
                     cashierId: req.user.id,
+                    officerSelectionConfirmed: req.body.officerSelectionConfirmed === true,
                     walletId,
                     totalAmount,
                     transactionType: 'sale',
+                    walletBalanceBefore: wallet.currentBalance,
+                    walletBalanceAfter: walletAfterDebit.currentBalance,
                     notes,
                     items: items.map((item) => ({
                         productId: item.productId || null,
@@ -108,14 +136,6 @@ router.post('/', authorizeRoles('admin', 'cashier'), async (req, res, next) => {
                         createdAt: new Date()
                     })),
                     environmentId: req.user.environmentId
-                }
-            });
-
-            await tx.wallet.update({
-                where: { id: walletId },
-                data: {
-                    currentBalance: { decrement: totalAmount },
-                    categoryBalances
                 }
             });
 
@@ -333,8 +353,8 @@ router.post('/:id/return', authorizeRoles('admin', 'cashier'), async (req, res, 
         if (!originalTransaction || originalTransaction.environmentId !== req.user.environmentId) {
             return res.status(404).json({ error: 'Transaction not found' });
         }
-        if (originalTransaction.transactionType === 'return') {
-            return res.status(400).json({ error: 'Cannot return a return transaction' });
+        if (originalTransaction.transactionType !== 'sale') {
+            return res.status(400).json({ error: 'ניתן לבצע החזרה רק עבור עסקת קנייה' });
         }
 
         const returnTransaction = await tenantPrisma.$transaction(async (tx) => {
@@ -366,6 +386,20 @@ router.post('/:id/return', authorizeRoles('admin', 'cashier'), async (req, res, 
                 };
             });
 
+            const walletAfterReturn = await tx.wallet.update({
+                where: { id: originalTransaction.walletId },
+                data: {
+                    currentBalance: {
+                        increment: originalTransaction.totalAmount
+                    },
+                    categoryBalances
+                }
+            });
+
+            if (!Number.isFinite(wallet.currentBalance) || !Number.isFinite(walletAfterReturn?.currentBalance)) {
+                throw new Error('Wallet balance snapshot is unavailable; return was not committed');
+            }
+
             const trans = await tx.transaction.create({
                 data: {
                     transactionNumber: `RTN-${Date.now()}`,
@@ -374,19 +408,11 @@ router.post('/:id/return', authorizeRoles('admin', 'cashier'), async (req, res, 
                     walletId: originalTransaction.walletId,
                     totalAmount: originalTransaction.totalAmount,
                     transactionType: 'return',
+                    walletBalanceBefore: wallet.currentBalance,
+                    walletBalanceAfter: walletAfterReturn.currentBalance,
                     notes: `Return of ${originalTransaction.transactionNumber}`,
                     items: transItems,
                     environmentId: req.user.environmentId
-                }
-            });
-
-            await tx.wallet.update({
-                where: { id: originalTransaction.walletId },
-                data: {
-                    currentBalance: {
-                        increment: originalTransaction.totalAmount
-                    },
-                    categoryBalances
                 }
             });
 

@@ -3,8 +3,13 @@ import { createMessage } from '../../services/messageService';
 import { getSettings, updateSettings } from '../../services/settingsService';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import toast from 'react-hot-toast';
+import { useAuthStore } from '../../store/authStore';
 
 const Settings = () => {
+    const { user: currentUser } = useAuthStore();
+    const [posManualEntryDisabled, setPosManualEntryDisabled] = useState(false);
+    const [settingsReady, setSettingsReady] = useState(false);
+    const [settingsError, setSettingsError] = useState('');
     const [isSavingMessage, setIsSavingMessage] = useState(false);
     const [isSavingSettings, setIsSavingSettings] = useState(false);
 
@@ -16,18 +21,24 @@ const Settings = () => {
     const [lowStockPercentage, setLowStockPercentage] = useState(10);
 
     useEffect(() => {
+        let active = true;
+        setSettingsReady(false);
+        setSettingsError('');
         const loadSettings = async () => {
             try {
                 const data = await getSettings();
-                if (data && data.lowStockPercentage !== undefined) {
-                    setLowStockPercentage(data.lowStockPercentage);
-                }
-            } catch (err) {
-                console.error("Failed to load settings:", err);
+                if (!active) return;
+                if (data.environmentId !== currentUser?.environmentId) throw new Error('Environment changed');
+                setLowStockPercentage(data.lowStockPercentage ?? 10);
+                setPosManualEntryDisabled(data.posManualEntryDisabled === true);
+                setSettingsReady(true);
+            } catch (_error) {
+                if (active) setSettingsError('טעינת ההגדרות נכשלה. יש לרענן לפני שמירה.');
             }
         };
         loadSettings();
-    }, []);
+        return () => { active = false; };
+    }, [currentUser?.environmentId]);
 
     const handleSendMessage = async (e) => {
         e.preventDefault();
@@ -48,7 +59,8 @@ const Settings = () => {
     const handleSaveSettings = async (e) => {
         e.preventDefault();
 
-        const percentage = parseFloat(lowStockPercentage);
+        if (!settingsReady || isSavingSettings) return;
+        const percentage = Number(lowStockPercentage);
         if (isNaN(percentage) || percentage < 0 || percentage > 100) {
             toast.error('יש להזין אחוז תקין בין 0 ל-100.');
             return;
@@ -56,7 +68,7 @@ const Settings = () => {
 
         setIsSavingSettings(true);
         try {
-            await updateSettings({ lowStockPercentage: percentage });
+            await updateSettings({ lowStockPercentage: percentage, posManualEntryDisabled, environmentId: currentUser?.environmentId });
             toast.success('הגדרות המערכת עודכנו בהצלחה!');
         } catch (err) {
             console.error(err);
@@ -157,9 +169,20 @@ const Settings = () => {
                             </div>
                         </div>
 
+                        <label className="flex items-start gap-3 p-4 bg-gray-50 rounded-xl cursor-pointer">
+                            <input type="checkbox" className="mt-1" checked={posManualEntryDisabled}
+                                disabled={!settingsReady || isSavingSettings}
+                                onChange={(event) => setPosManualEntryDisabled(event.target.checked)} />
+                            <span>
+                                <span className="block text-sm font-bold">חסימת הקלדה ידנית בקופה בלבד</span>
+                                <span className="block text-xs text-gray-600 mt-1">חוסם הקלדה, הדבקה ושינוי כמות בהקלדה בקופה. סריקת ברקוד, בחירת מוצרים וכפתורי הכמות נשארים פעילים. מסכי הניהול אינם משתנים.</span>
+                            </span>
+                        </label>
+                        {settingsError && <p role="alert" className="text-sm text-red-700">{settingsError}</p>}
+
                         <button
                             type="submit"
-                            disabled={isSavingSettings}
+                            disabled={isSavingSettings || !settingsReady}
                             className="w-full mt-4 bg-[#526f52] hover:bg-[#435c43] text-white disabled:opacity-50 py-3.5 rounded-xl font-bold transition-all flex items-center justify-center gap-2 shrink-0"
                         >
                             <span className="material-symbols-outlined">save</span>

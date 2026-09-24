@@ -159,6 +159,11 @@ model Transaction {
   walletId          String?         @map("wallet_id") @db.ObjectId
   totalAmount       Float           @map("total_amount")
   transactionType   TransactionType @map("transaction_type")
+  officerSelectionConfirmed Boolean? @map("officer_selection_confirmed")
+  walletBalanceBefore Float? @map("wallet_balance_before")
+  walletBalanceAfter Float? @map("wallet_balance_after")
+  walletCategoryName String? @map("wallet_category_name")
+  requestFingerprint String? @map("request_fingerprint")
   status            String          @default("completed")
   notes             String?
   createdAt         DateTime        @default(now()) @map("created_at")
@@ -203,6 +208,7 @@ model SystemMessage {
 model SystemSettings {
   id                 String   @id @default(auto()) @map("_id") @db.ObjectId
   lowStockPercentage Float    @default(10.0) @map("low_stock_percentage")
+  posManualEntryDisabled Boolean? @default(false) @map("pos_manual_entry_disabled")
   updatedAt          DateTime @updatedAt @map("updated_at")
 
   environmentId String   @map("environment_id") @db.ObjectId

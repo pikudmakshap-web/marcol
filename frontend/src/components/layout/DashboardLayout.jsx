@@ -43,7 +43,7 @@ const DashboardLayout = () => {
     }, [user?.authorizedEnvironments, user?.environmentId, user?.environmentName]);
 
     useEffect(() => {
-        if (!user?.id) return;
+        if (!user?.id || !user?.environmentId || location.pathname.startsWith('/admin/environments')) return;
 
         // Fetch global data based on user role
         fetchWallets({ reset: true, limit: 50 }); // All roles need wallets
@@ -123,7 +123,7 @@ const DashboardLayout = () => {
             socket.off('user_status_change', handleUserStatusChange);
             socket.disconnect();
         };
-    }, [fetchProducts, fetchWallets, fetchUsers, fetchCategories, fetchDashboardStats, addProduct, updateProductState, removeProduct, addUser, updateUserState, removeUser, user?.role, user?.id, user?.environmentId]);
+    }, [fetchProducts, fetchWallets, fetchUsers, fetchCategories, fetchDashboardStats, addProduct, updateProductState, removeProduct, addUser, updateUserState, removeUser, user?.role, user?.id, user?.environmentId, location.pathname.startsWith('/admin/environments')]);
 
     const isSuperAdminEnvView = location.pathname.startsWith('/admin/environments');
     const isCashierView = user?.role === 'cashier';
@@ -187,7 +187,7 @@ const DashboardLayout = () => {
             <div className="fixed bottom-[-10%] right-[-10%] w-[40vw] h-[40vw] bg-[#f1f8e9] rounded-full blur-[100px] -z-10 opacity-60"></div>
 
             <div className="flex h-screen overflow-hidden">
-                <GlobalNotification />
+                {user?.id && user?.environmentId && !isSuperAdminEnvView && <GlobalNotification key={`${user.id}:${user.environmentId}`} />} 
                 {/* Fixed Sidebar - Hidden in Super Admin Env Management */}
                 {!isSuperAdminEnvView && !isCashierView && <Sidebar onHelpClick={handleHelpClick} />}
 
@@ -206,7 +206,7 @@ const DashboardLayout = () => {
                                         {symbol}
                                     </span>
                                 ))}
-                                <span className="text-[11px] font-bold text-slate-700 leading-none truncate max-w-[120px]">
+                                <span className="text-[21px] font-bold text-slate-700 leading-none truncate max-w-[120px]">
                                     {envBaseName || 'Marcol'}
                                 </span>
                             </div>

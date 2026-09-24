@@ -21,10 +21,20 @@ function clearClientStorage() {
         AUTH_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key));
     }
 
+    // Preserve only unfinished top-ups, scoped by environment / actor / wallet.
+    // Their operation IDs allow a safe retry after re-authentication in this tab.
+    const pendingTopUps = [];
     try {
+        for (let i = 0; i < sessionStorage.length; i += 1) {
+            const key = sessionStorage.key(i);
+            if (key?.startsWith('marcol:pending-topup:v1:')) {
+                pendingTopUps.push([key, sessionStorage.getItem(key)]);
+            }
+        }
         sessionStorage.clear();
+        for (const [key, value] of pendingTopUps) sessionStorage.setItem(key, value);
     } catch (_error) {
-        // Ignore session storage failures
+        // Ignore storage access failure; never retry a mutation automatically.
     }
 }
 

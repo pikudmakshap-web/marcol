@@ -10,6 +10,7 @@ import { useAuthStore } from '../../store/authStore';
 import { useCategoryStore } from '../../store/categoryStore';
 import { createCategory } from '../../services/categoryService';
 import LoadingSpinner from '../../components/LoadingSpinner';
+import WalletTopUpModal from '../../components/WalletTopUpModal';
 import * as XLSX from 'xlsx';
 import toast from 'react-hot-toast';
 import { toBackgroundRgba, toStrongSolidColor, isWhiteLikeColor } from '../../utils/categoryColor';
@@ -58,6 +59,7 @@ function Wallets() {
     const systemMode = !hasWallets ? 'none' : (wallets[0].categoryBalances?.length > 0 ? 'categories' : 'general');
 
     // Modal State
+    const [topUpWallet, setTopUpWallet] = useState(null);
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
     const [isAddUserModalOpen, setIsAddUserModalOpen] = useState(false);
@@ -185,6 +187,19 @@ function Wallets() {
             handleSelectWallet(wallets[0]);
         }
     }, [wallets, currentUser?.role, selectedWalletId, loading]);
+
+    useEffect(() => { setTopUpWallet(null); }, [currentUser?.environmentId]);
+    const handleTopUpSuccess = (result) => {
+        const updated = result.wallet;
+        if (useAuthStore.getState().user?.environmentId !== updated.environmentId) return;
+        useWalletStore.getState().updateWalletState(updated.id, updated);
+        setCurrentWallet((previous) => previous?.id === updated.id ? { ...previous, ...updated } : previous);
+        setTopUpWallet(null);
+        toast.success(result.replayed ? 'ההפקדה כבר בוצעה; לא נוסף כסף פעם נוספת' : 'הכסף נוסף לארנק בהצלחה');
+        if (selectedWalletId === updated.id) {
+            getWalletTransactions(updated.id).then((rows) => { if (useAuthStore.getState().user?.environmentId === updated.environmentId) setWalletTransactions(rows); }).catch(() => toast.error('היתרה עודכנה, אך יש לרענן את ההיסטוריה'));
+        }
+    };
 
     const fetchData = () => {
         fetchWallets({ force: true, reset: true, limit: 50 });
@@ -467,6 +482,10 @@ function Wallets() {
 
     return (
         <div className="space-y-8 pb-20 relative" data-tour="wallets-page">
+            {topUpWallet && ['admin', 'superadmin'].includes(currentUser?.role) && <WalletTopUpModal
+                key={`${currentUser.environmentId}:${currentUser.id}:${topUpWallet.id}`} wallet={topUpWallet}
+                actorId={currentUser.id} environmentId={currentUser.environmentId}
+                onClose={() => setTopUpWallet(null)} onSuccess={handleTopUpSuccess} /> }
             {currentUser?.role === 'cashier' && (
                 <div className="absolute left-2 top-2 z-30 flex items-center gap-2">
                     <button
@@ -568,6 +587,9 @@ function Wallets() {
                                         </div>
                                         {(currentUser?.role === 'admin' || currentUser?.role === 'superadmin') && (
                                             <div className="flex gap-1" onClick={e => e.stopPropagation()}>
+                                                <button type="button" disabled={!wallet?.isActive} onClick={(e) => { e.stopPropagation(); setTopUpWallet(wallet); }} title="הוספת כסף לארנק" aria-label={`הוספת כסף לארנק ${wallet?.name || ''}`} className="w-8 h-8 rounded-full bg-green-50 text-[#526f52] hover:bg-green-100 disabled:opacity-40 flex items-center justify-center">
+                                                    <span className="material-symbols-outlined text-[20px]">add</span>
+                                                </button>
                                                 <button onClick={(e) => handleOpenEdit(e, wallet)} className="w-8 h-8 rounded-full hover:bg-gray-100 flex items-center justify-center text-gray-400 hover:text-[#526f52] transition-colors">
                                                     <span className="material-symbols-outlined text-[20px]">edit</span>
                                                 </button>
@@ -679,6 +701,9 @@ function Wallets() {
                                         </button>
                                         {(currentUser?.role === 'admin' || currentUser?.role === 'superadmin') && (
                                             <>
+                                                <button type="button" disabled={!currentWallet?.isActive} onClick={(e) => { e.stopPropagation(); setTopUpWallet(currentWallet); }} title="הוספת כסף לארנק" aria-label={`הוספת כסף לארנק ${currentWallet?.name || ''}`} className="w-8 h-8 rounded-full bg-green-50 text-[#526f52] hover:bg-green-100 disabled:opacity-40 flex items-center justify-center">
+                                                    <span className="material-symbols-outlined text-[20px]">add</span>
+                                                </button>
                                                 <button onClick={(e) => handleOpenEdit(e, currentWallet)} className="w-10 h-10 rounded-full hover:bg-white flex items-center justify-center text-gray-500 hover:text-[#526f52] shadow-sm transition-colors bg-white/50 border border-gray-200/50" title="ערוך ארנק">
                                                     <span className="material-symbols-outlined text-[20px]">edit</span>
                                                 </button>

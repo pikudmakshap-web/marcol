@@ -1,4 +1,6 @@
 const express = require('express');
+const { verifiedMutation } = require('../middleware/verifiedMutation.js');
+const { creditWallet } = require('../services/walletCreditService.js');
 const { authenticateToken, authorizeRoles } = require('../middleware/auth.js');
 const { getIO } = require('../socket.js');
 const { usersPrisma } = require('../config/database.js');
@@ -456,10 +458,14 @@ router.put('/:id', authorizeRoles('admin'), async (req, res, next) => {
             }
         }
 
-        await tenantPrisma.wallet.updateMany({
-            where: { id: req.params.id, environmentId: req.user.environmentId },
+        const edited = await tenantPrisma.wallet.updateMany({
+            where: { id: req.params.id, environmentId: req.user.environmentId,
+                updatedAt: currentWallet.updatedAt, currentBalance: currentWallet.currentBalance },
             data: updateData
         });
+        if (edited.count !== 1) {
+            return res.status(409).json({ error: 'הארנק עודכן במקביל. יש לפתוח אותו מחדש לפני שמירה' });
+        }
 
         await cleanupUnusedCategories(req.user.environmentId, tenantPrisma);
 
@@ -578,41 +584,17 @@ router.delete('/:id', authorizeRoles('admin'), async (req, res, next) => {
     }
 });
 
-// POST /api/wallets/:id/credit - זיכוי ארנק
-router.post('/:id/credit', authorizeRoles('admin'), async (req, res, next) => {
+// POST /api/wallets/:id/credit - additive, audited and retry-safe.
+router.post('/:id/credit', authorizeRoles('admin'), verifiedMutation, async (req, res, next) => {
     try {
         const tenantPrisma = requireTenantPrisma(req);
-        const { amount, categoryName } = req.body;
-
-        if (!amount || amount <= 0 || !categoryName) {
-            return res.status(400).json({ error: 'Valid amount and category required' });
-        }
-
-        const currentWallet = await tenantPrisma.wallet.findUnique({ where: { id: req.params.id } });
-        if (!currentWallet || currentWallet.environmentId !== req.user.environmentId) {
-            return res.status(404).json({ error: 'Wallet not found' });
-        }
-
-        const categoryBalances = [...(currentWallet.categoryBalances || [])];
-        const catIndex = categoryBalances.findIndex((c) => c.categoryName === categoryName);
-        if (catIndex > -1) {
-            categoryBalances[catIndex].balance += parseFloat(amount);
-        } else {
-            return res.status(400).json({ error: 'הקטגוריה אינה מוגדרת בארנק. יש לערוך את הארנק.' });
-        }
-
-        const wallet = await tenantPrisma.wallet.updateMany({
-            where: { id: req.params.id, environmentId: req.user.environmentId },
-            data: {
-                currentBalance: {
-                    increment: parseFloat(amount)
-                },
-                categoryBalances
-            }
-        });
-
-        getIO().emit('data_update', { type: 'wallet' });
-        return res.json(wallet);
+        const result = await creditWallet(tenantPrisma, req.user, req.params.id, req.body);
+        // A socket failure must never turn a committed deposit into a failed request.
+        try {
+            getIO().emit('data_update', { type: 'wallet', environmentId: req.user.environmentId });
+            getIO().emit('data_update', { type: 'transaction', environmentId: req.user.environmentId });
+        } catch (_notificationError) { /* The durable database result remains authoritative. */ }
+        return res.status(result.replayed ? 200 : 201).json(result);
     } catch (error) {
         return next(error);
     }
@@ -650,7 +632,8 @@ router.post('/:id/debit', authorizeRoles('admin'), async (req, res, next) => {
         }
 
         const updated = await tenantPrisma.wallet.updateMany({
-            where: { id: req.params.id, environmentId: req.user.environmentId },
+            where: { id: req.params.id, environmentId: req.user.environmentId,
+                updatedAt: wallet.updatedAt, currentBalance: wallet.currentBalance },
             data: {
                 currentBalance: {
                     decrement: parseFloat(amount)
@@ -659,6 +642,9 @@ router.post('/:id/debit', authorizeRoles('admin'), async (req, res, next) => {
             }
         });
 
+        if (updated.count !== 1) {
+            return res.status(409).json({ error: 'הארנק עודכן במקביל. יש לרענן ולנסות שוב' });
+        }
         getIO().emit('data_update', { type: 'wallet' });
         return res.json(updated);
     } catch (error) {

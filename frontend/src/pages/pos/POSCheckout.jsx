@@ -6,6 +6,8 @@ import { createTransaction } from '../../services/transactionService';
 import toast from 'react-hot-toast';
 import ProductImage from '../../components/ProductImage';
 import { useAuthStore } from '../../store/authStore';
+import { usePosInputPolicy } from '../../hooks/usePosInputPolicy';
+import { createScanCollector } from '../../utils/posScanner.mjs';
 
 
 const POSCheckout = () => {
@@ -14,6 +16,7 @@ const POSCheckout = () => {
     const onHelpClick = outletContext.onHelpClick;
     const { user: currentUser } = useAuthStore();
     const isCashierView = currentUser?.role === 'cashier';
+    const { manualEntryDisabled, policyLoading, policyError, reloadPolicy } = usePosInputPolicy(currentUser?.environmentId);
     const [currentTime, setCurrentTime] = useState(new Date());
 
     useEffect(() => {
@@ -69,6 +72,7 @@ const POSCheckout = () => {
     const officerMenuRef = useRef(null);
 
     useEffect(() => {
+        let cancelled = false;
         const fetchPaymentWallets = async () => {
             if (!paymentQuery) {
                 setPaymentWallets([]);
@@ -78,6 +82,7 @@ const POSCheckout = () => {
             }
             try {
                 const results = await searchWallets(paymentQuery);
+                if (cancelled) return;
                 setPaymentWallets(results);
                 if (results.length === 0) {
                     setSelectedWallet(null);
@@ -85,21 +90,22 @@ const POSCheckout = () => {
                 } else if (results.length === 1) {
                     const w = results[0];
                     setSelectedWallet(w);
-                    setSelectedOfficerId(w.walletUsers?.length > 0 ? w.walletUsers[0].user.id : null);
+                    setSelectedOfficerId(w.walletUsers?.length === 1 ? w.walletUsers[0].user.id : null);
                 } else {
                     setSelectedWallet(null);
                     setSelectedOfficerId(null);
                 }
             } catch (err) {
-                setPaymentError(err.response?.data?.error || 'שגיאה בחיפוש ארנק');
+                if (!cancelled) setPaymentError(err.response?.data?.error || 'שגיאה בחיפוש ארנק');
             }
         };
 
         const timer = setTimeout(fetchPaymentWallets, 300);
-        return () => clearTimeout(timer);
+        return () => { cancelled = true; clearTimeout(timer); };
     }, [paymentQuery]);
 
     useEffect(() => {
+        let cancelled = false;
         const fetchCheckWallets = async () => {
             if (!walletCheckQuery) {
                 setWalletCheckWallets([]);
@@ -109,17 +115,18 @@ const POSCheckout = () => {
             }
             try {
                 const results = await searchWallets(walletCheckQuery);
+                if (cancelled) return;
                 setWalletCheckWallets(results);
                 if (results.length === 0) setWalletCheckResult(null);
                 else if (results.length === 1) setWalletCheckResult(results[0]);
                 else setWalletCheckResult(null);
             } catch (err) {
-                setWalletCheckError(err.response?.data?.error || 'שגיאה בחיפוש ארנק');
+                if (!cancelled) setWalletCheckError(err.response?.data?.error || 'שגיאה בחיפוש ארנק');
             }
         };
 
         const timer = setTimeout(fetchCheckWallets, 300);
-        return () => clearTimeout(timer);
+        return () => { cancelled = true; clearTimeout(timer); };
     }, [walletCheckQuery]);
 
     useEffect(() => {
@@ -153,12 +160,12 @@ const POSCheckout = () => {
         // Determine officerId
         let officerId = selectedOfficerId;
 
-        if (!officerId && selectedWallet.walletUsers?.length > 0) {
+        if (!officerId && selectedWallet.walletUsers?.length === 1) {
             officerId = selectedWallet.walletUsers[0].user.id;
         }
 
         if (!officerId) {
-            setPaymentError('לא הוגדר משתמש לארנק זה, לא ניתן לבצע עסקה');
+            setPaymentError('יש לבחור את מקבל המוצרים לפני השלמת העסקה');
             return;
         }
 
@@ -174,6 +181,7 @@ const POSCheckout = () => {
 
             await createTransaction({
                 officerId: officerId,
+                officerSelectionConfirmed: true,
                 walletId: selectedWallet.id,
                 items,
                 notes: ''
@@ -268,12 +276,50 @@ const POSCheckout = () => {
         setSelectedCategory(null);
     }, []);
 
+    // This listener exists only while the checkout page is mounted. Read-only
+    // fields receive a completed scan through React state, not individual keys.
+    useEffect(() => {
+        if (!manualEntryDisabled) return;
+        const collector = createScanCollector();
+        const scan = (event) => {
+            const target = event.target;
+            const inCheckout = target?.closest?.('[data-pos-input-guard]');
+            const pageBody = target === document.body || target === document.documentElement;
+            if (!inCheckout && !pageBody) { collector.reset(); return; }
+            const value = collector.push(event, performance.now());
+            if (event.key.length === 1 && event.key !== ' ' && !event.ctrlKey && !event.metaKey && !event.altKey) event.preventDefault();
+            if (!value) return;
+            event.preventDefault(); event.stopPropagation();
+            if (policyLoading || policyError) { toast.error('יש לטעון את הגדרות הקופה לפני הסריקה'); return; }
+            if (isPaymentModalOpen) { setPaymentQuery(value); return; }
+            if (isWalletCheckOpen) { setWalletCheckQuery(value); return; }
+            if (isPriceCheckOpen) { setPriceCheckQuery(value); return; }
+            if (isManualBarcodeOpen || isCategoriesModalOpen) return;
+            const product = products.find((item) => item.barcode === value);
+            if (product) handleAddToCart(product);
+            else toast.error(`לא נמצא מוצר עם ברקוד ${value}`);
+        };
+        window.addEventListener('keydown', scan, true);
+        return () => { window.removeEventListener('keydown', scan, true); collector.reset(); };
+    }, [manualEntryDisabled, policyLoading, policyError, products, isPaymentModalOpen, isWalletCheckOpen, isPriceCheckOpen, isManualBarcodeOpen, isCategoriesModalOpen, handleAddToCart]);
+    useEffect(() => {
+        if (manualEntryDisabled) {
+            setIsManualBarcodeOpen(false); setManualBarcodeQuery('');
+            setPaymentQuery(''); setSelectedWallet(null); setSelectedOfficerId(null); setPaymentWallets([]);
+            setPriceCheckQuery(''); setWalletCheckQuery(''); setWalletCheckResult(null); setWalletCheckWallets([]);
+        }
+    }, [manualEntryDisabled, currentUser?.environmentId]);
+    const blockManualTransfer = (event) => {
+        if (manualEntryDisabled && event.target?.matches?.('input, textarea, [contenteditable="true"]')) event.preventDefault();
+    };
+
     const barcodeBufferRef = useRef('');
     const lastKeyTimeRef = useRef(Date.now());
 
     // Global Barcode Scanner Listener
     useEffect(() => {
         const handleGlobalKeyDown = (e) => {
+            if (manualEntryDisabled) { barcodeBufferRef.current = ''; return; }
             // Ignore if typing inside input fields 
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
                 return;
@@ -315,7 +361,7 @@ const POSCheckout = () => {
 
         window.addEventListener('keydown', handleGlobalKeyDown);
         return () => window.removeEventListener('keydown', handleGlobalKeyDown);
-    }, [products, isPaymentModalOpen, isCategoriesModalOpen, isManualBarcodeOpen, isPriceCheckOpen, isWalletCheckOpen, handleAddToCart]);
+    }, [manualEntryDisabled, products, isPaymentModalOpen, isCategoriesModalOpen, isManualBarcodeOpen, isPriceCheckOpen, isWalletCheckOpen, handleAddToCart]);
 
     const totalItems = orderItems.reduce((sum, item) => sum + (item.qty === '' ? 0 : item.qty), 0);
     const totalPrice = orderItems.reduce((sum, item) => sum + (item.price * (item.qty === '' ? 0 : item.qty)), 0);
@@ -352,7 +398,11 @@ const POSCheckout = () => {
     }
 
     return (
-        <>
+        <div data-pos-input-guard onPasteCapture={blockManualTransfer} onDropCapture={blockManualTransfer} onBeforeInputCapture={blockManualTransfer}>
+            {(manualEntryDisabled || policyError) && <div role="status" className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm mb-2" dir="rtl">
+                {policyLoading ? 'טוען הגדרות קופה...' : policyError || 'הקלדה ידנית חסומה בקופה. סריקה, בחירת מוצרים וכפתורי הכמות נשארים פעילים.'}
+                {policyError && <button type="button" className="underline mr-3" onClick={reloadPolicy}>נסה שוב</button>}
+            </div>}
             <div className="flex flex-col lg:flex-row-reverse gap-4 h-[calc(100vh-5rem)] max-w-[1600px] mx-auto p-2 font-sans overflow-hidden" data-tour="pos-page">
 
                 {/* Left Column: Order Summary (Receipt) */}
@@ -389,10 +439,14 @@ const POSCheckout = () => {
                                         <span className="material-symbols-outlined text-[1rem]">add</span>
                                     </button>
                                     <input
+                                        readOnly={manualEntryDisabled}
+                                        inputMode={manualEntryDisabled ? 'none' : undefined}
+                                        aria-readonly={manualEntryDisabled}
                                         type="number"
                                         min="1"
                                         value={item.qty === '' ? '' : item.qty}
                                         onChange={(e) => {
+                                            if (manualEntryDisabled) return;
                                             const val = e.target.value;
                                             if (val === '') {
                                                 setOrderItems(prev => prev.map(i => i.id === item.id ? { ...i, qty: '' } : i));
@@ -514,7 +568,7 @@ const POSCheckout = () => {
 
                                 {/* Action Buttons underneath */}
                                 <div className="flex flex-wrap justify-center gap-3 mb-8 w-full max-w-lg" data-tour="pos-quick-actions">
-                                    <button onClick={() => setIsManualBarcodeOpen(true)} className="flex-1 min-w-[140px] bg-[#ecfdf5] hover:bg-[#d1fae5] text-[#3ce619] py-4 px-2 rounded-full font-bold text-sm sm:text-base transition-transform hover:scale-105 border-2 border-[#3ce619]/20 shadow-sm flex flex-col items-center justify-center gap-1">
+                                    <button disabled={manualEntryDisabled} title={manualEntryDisabled ? 'הקלדה ידנית חסומה בהגדרות' : 'הקלדת פריט'} onClick={() => { if (!manualEntryDisabled) setIsManualBarcodeOpen(true); }} className="flex-1 min-w-[140px] bg-[#ecfdf5] hover:bg-[#d1fae5] text-[#3ce619] py-4 px-2 rounded-full font-bold text-sm sm:text-base transition-transform hover:scale-105 border-2 border-[#3ce619]/20 shadow-sm flex flex-col items-center justify-center gap-1">
                                         <span className="material-symbols-outlined text-2xl">keyboard</span>
                                         הקלדת פריט
                                     </button>
@@ -668,11 +722,14 @@ const POSCheckout = () => {
                             </div>
                             <div className="p-8 flex flex-col items-center w-full">
                                 <input
+                                        readOnly={manualEntryDisabled}
+                                        inputMode={manualEntryDisabled ? 'none' : undefined}
+                                        aria-readonly={manualEntryDisabled}
                                     type="text"
                                     placeholder="הקש פריט / ברקוד כאן..."
                                     autoFocus
                                     value={manualBarcodeQuery}
-                                    onChange={(e) => setManualBarcodeQuery(e.target.value)}
+                                    onChange={(e) => { if (!manualEntryDisabled) setManualBarcodeQuery(e.target.value); }}
                                     className="w-full bg-gray-50 border border-gray-200 rounded-xl px-5 py-4 text-center text-xl font-bold text-gray-800 focus:outline-none focus:ring-2 focus:ring-[#3ce619] focus:border-transparent transition-all mb-4"
                                 />
 
@@ -755,11 +812,14 @@ const POSCheckout = () => {
 
                                 <form onSubmit={handlePaymentSearch} className="w-full relative mb-4">
                                     <input
+                                        readOnly={manualEntryDisabled}
+                                        inputMode={manualEntryDisabled ? 'none' : undefined}
+                                        aria-readonly={manualEntryDisabled}
                                         type="text"
-                                        placeholder="הקלד שם ארנק / מספר אישי פריט או ברקוד..."
+                                        placeholder={manualEntryDisabled ? 'סרוק ברקוד' : 'הקלד שם ארנק / מספר אישי פריט או ברקוד...'}
                                         autoFocus
                                         value={paymentQuery}
-                                        onChange={(e) => setPaymentQuery(e.target.value)}
+                                        onChange={(e) => { if (!manualEntryDisabled) setPaymentQuery(e.target.value); }}
                                         className="w-full bg-gray-50 border border-gray-200 rounded-xl px-5 py-4 text-center font-bold text-gray-800 focus:outline-none focus:ring-2 focus:ring-[#3ce619] focus:border-transparent transition-all pr-12 text-sm"
                                     />
                                     <button type="submit" className="absolute left-3 top-1/2 -translate-y-1/2 w-10 h-10 bg-white rounded-lg shadow-sm flex items-center justify-center text-[#166534] hover:bg-gray-50">
@@ -777,7 +837,7 @@ const POSCheckout = () => {
                                     <div className="w-full max-h-[30vh] overflow-y-auto flex flex-col gap-2 custom-scrollbar pr-2 mb-4">
                                         <div className="text-sm font-bold text-gray-500 mb-2">נמצאו מספר ארנקים, בחר אחד:</div>
                                         {paymentWallets.map(w => (
-                                            <button key={w.id} onClick={() => { setSelectedWallet(w); setSelectedOfficerId(w.walletUsers?.length > 0 ? w.walletUsers[0].user.id : null); }} className="flex justify-between items-center bg-gray-50 hover:bg-[#ecfdf5] border border-gray-200 hover:border-[#3ce619]/50 p-4 rounded-xl transition-colors w-full text-right">
+                                            <button key={w.id} onClick={() => { setSelectedWallet(w); setSelectedOfficerId(w.walletUsers?.length === 1 ? w.walletUsers[0].user.id : null); }} className="flex justify-between items-center bg-gray-50 hover:bg-[#ecfdf5] border border-gray-200 hover:border-[#3ce619]/50 p-4 rounded-xl transition-colors w-full text-right">
                                                 <div className="flex flex-col text-right">
                                                     <span className="font-bold text-[#2d3748]">{w.name}</span>
                                                     <span className="text-xs text-gray-500">{w.walletNumber}</span>
@@ -801,7 +861,7 @@ const POSCheckout = () => {
                                             <div className="w-full mt-2 relative">
                                                 <div className="flex items-center gap-2 mb-1.5">
                                                     <label className="text-sm font-bold text-[#166534]">משתמש לחיוב</label>
-                                                    <span className="text-xs text-[#166534]/70 bg-[#166534]/10 px-2 py-0.5 rounded-full font-medium">(אופציונלי)</span>
+                                                    <span className="text-xs text-[#166534]/70 bg-[#166534]/10 px-2 py-0.5 rounded-full font-medium">(נדרש לאישור העסקה)</span>
                                                 </div>
                                                 <div className="relative" ref={officerMenuRef}>
                                                     <button
@@ -905,11 +965,14 @@ const POSCheckout = () => {
                                 <p className="text-gray-500 mb-6 text-center text-sm">הזן שם פריט או ברקוד לבדיקת מחירו מבלי להוסיפו לעגלה.</p>
 
                                 <input
+                                        readOnly={manualEntryDisabled}
+                                        inputMode={manualEntryDisabled ? 'none' : undefined}
+                                        aria-readonly={manualEntryDisabled}
                                     type="text"
-                                    placeholder="דוגמא: ארנק מחלקה / מ.א קצין 🔍"
+                                    placeholder={manualEntryDisabled ? 'סרוק ברקוד' : 'דוגמא: ארנק מחלקה / מ.א קצין 🔍'}
                                     autoFocus
                                     value={priceCheckQuery}
-                                    onChange={(e) => setPriceCheckQuery(e.target.value)}
+                                    onChange={(e) => { if (!manualEntryDisabled) setPriceCheckQuery(e.target.value); }}
                                     className="w-full bg-gray-50 border border-gray-200 rounded-xl px-5 py-4 text-center text-lg font-bold text-gray-800 focus:outline-none focus:ring-2 focus:ring-[#3ce619] focus:border-transparent transition-all mb-4"
                                 />
 
@@ -981,11 +1044,14 @@ const POSCheckout = () => {
 
                                 <form onSubmit={handleWalletCheckSearch} className="w-full relative mb-4">
                                     <input
+                                        readOnly={manualEntryDisabled}
+                                        inputMode={manualEntryDisabled ? 'none' : undefined}
+                                        aria-readonly={manualEntryDisabled}
                                         type="text"
-                                        placeholder="הקלד או סרוק ברקוד ולחץ אנטר..."
+                                        placeholder={manualEntryDisabled ? 'סרוק ברקוד' : 'הקלד או סרוק ברקוד ולחץ אנטר...'}
                                         autoFocus
                                         value={walletCheckQuery}
-                                        onChange={(e) => setWalletCheckQuery(e.target.value)}
+                                        onChange={(e) => { if (!manualEntryDisabled) setWalletCheckQuery(e.target.value); }}
                                         className="w-full bg-gray-50 border border-gray-200 rounded-xl px-5 py-4 text-center font-bold text-gray-800 focus:outline-none focus:ring-2 focus:ring-[#3ce619] focus:border-transparent transition-all pr-12 text-sm"
                                     />
                                     <button type="submit" className="absolute left-3 top-1/2 -translate-y-1/2 w-10 h-10 bg-white rounded-lg shadow-sm flex items-center justify-center text-[#166534] hover:bg-gray-50">
@@ -1039,7 +1105,7 @@ const POSCheckout = () => {
                 )
             }
 
-        </>
+        </div>
     );
 };
 

@@ -26,8 +26,8 @@ export const deleteWallet = async (id) => {
     return response.data;
 };
 
-export const creditWallet = async (id, amount) => {
-    const response = await api.post(`/wallets/${id}/credit`, { amount });
+export const creditWallet = async (id, amount, options = {}) => {
+    const response = await api.post(`/wallets/${id}/credit`, { ...options, amount }, { timeout: 20000 });
     return response.data;
 };
 

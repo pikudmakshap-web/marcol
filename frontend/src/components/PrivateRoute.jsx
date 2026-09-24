@@ -28,6 +28,10 @@ function PrivateRoute({ allowedRoles }) {
         return <Navigate to="/login" replace />;
     }
 
+    if (user?.role === 'superadmin' && !user?.environmentId && !allowedRoles?.includes('superadmin')) {
+        return <Navigate to="/admin/environments" replace />;
+    }
+
     return <Outlet context={parentOutletContext} />;
 }
 

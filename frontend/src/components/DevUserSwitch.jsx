@@ -20,11 +20,12 @@ function DevUserSwitch() {
     const handleSwitch = async (userId, targetRole) => {
         setLoadingId(userId);
         try {
-            await devSwitch(userId);
+            const result = await devSwitch(userId);
             // Force refetch wallets so the new user's restricted view is loaded
-            await useWalletStore.getState().fetchWallets(true);
+            if (result.user?.environmentId) await useWalletStore.getState().fetchWallets(true);
 
-            if (targetRole === 'admin') navigate('/admin/dashboard');
+            if (result.user?.role === 'superadmin') navigate('/admin/environments');
+            else if (targetRole === 'admin') navigate('/admin/dashboard');
             else if (targetRole === 'cashier') navigate('/pos/checkout');
             else if (targetRole === 'officer') navigate('/officer/dashboard');
             setIsOpen(false);
